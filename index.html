@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#E6F1F7">
+<title>트인길 — 터널·지하차도 회피 내비</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
+<style>
+:root{
+  --sky:#E6F1F7; --panel:#FFFFFF; --ink:#183243; --muted:#5B7486;
+  --line:#CFE0EA; --route:#1F7F86; --route-soft:#D7EEEF; --under:#D2581C; --under-soft:#FBE6DA;
+  --focus:#2B6CB0; color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --sky:#0F1E28; --panel:#16293A; --ink:#E4EEF4; --muted:#93AABA;
+    --line:#284257; --route:#4FC1C7; --route-soft:#173B42; --under:#F08A4B; --under-soft:#3D2416;
+    --focus:#7FB3E8; color-scheme:dark;
+  }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font-family:"Pretendard",-apple-system,"Noto Sans KR","Malgun Gothic",sans-serif;background:var(--sky);color:var(--ink);font-size:16px;line-height:1.5}
+#map{position:fixed;inset:0;z-index:0}
+.leaflet-container{background:var(--sky)}
+
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:10;background:var(--panel);
+  border-radius:22px 22px 0 0;box-shadow:0 -6px 24px rgba(24,50,67,.18);
+  max-height:72vh;display:flex;flex-direction:column;
+  padding-bottom:env(safe-area-inset-bottom,0px);transition:transform .25s ease}
+.sheet.min{transform:translateY(calc(100% - 64px - env(safe-area-inset-bottom,0px)))}
+.handle{border:0;background:none;width:100%;padding:10px 20px 6px;display:flex;align-items:center;justify-content:space-between;cursor:pointer;color:var(--ink);font:inherit}
+.handle::before{content:"";position:absolute;left:50%;top:7px;width:40px;height:4px;margin-left:-20px;border-radius:2px;background:var(--line)}
+.brand{font-weight:800;font-size:20px;letter-spacing:-.02em}
+.brand small{font-weight:500;font-size:13px;color:var(--muted);margin-left:6px}
+.handle span.chev{font-size:14px;color:var(--muted)}
+.body{overflow-y:auto;padding:4px 20px 20px}
+
+label.field{display:block;margin-top:12px}
+.field-label{font-size:13px;font-weight:600;color:var(--muted);margin-bottom:4px;display:block}
+.inrow{display:flex;gap:8px}
+input[type=text],input[type=password]{flex:1;min-width:0;font:inherit;font-size:16px;color:var(--ink);background:var(--sky);border:1.5px solid var(--line);border-radius:12px;padding:12px 14px}
+input:focus-visible,button:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.ghost{font:inherit;font-size:14px;font-weight:600;border:1.5px solid var(--line);background:var(--panel);color:var(--ink);border-radius:12px;padding:0 12px;cursor:pointer;white-space:nowrap}
+.resolved{font-size:12px;color:var(--muted);margin-top:4px;min-height:0}
+
+.toggles{margin-top:16px;border-top:1px solid var(--line)}
+.tog{display:flex;align-items:center;justify-content:space-between;padding:12px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.tog b{display:block;font-weight:700}
+.tog em{display:block;font-style:normal;font-size:13px;color:var(--muted)}
+.sw{position:relative;width:52px;height:30px;flex:none}
+.sw input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.sw i{position:absolute;inset:0;border-radius:15px;background:var(--line);transition:background .2s}
+.sw i::after{content:"";position:absolute;top:3px;left:3px;width:24px;height:24px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:transform .2s}
+.sw input:checked + i{background:var(--route)}
+.sw input:checked + i::after{transform:translateX(22px)}
+.sw input:focus-visible + i{outline:3px solid var(--focus);outline-offset:2px}
+
+.go{display:block;width:100%;margin-top:18px;font:inherit;font-size:17px;font-weight:700;border:0;border-radius:14px;padding:15px;background:var(--route);color:#fff;cursor:pointer}
+.go:disabled{opacity:.6;cursor:progress}
+details.key{margin-top:14px;font-size:14px;color:var(--muted)}
+details.key summary{cursor:pointer}
+details.key p{margin:6px 0}
+details.key a{color:var(--route)}
+
+.msg{margin-top:14px;padding:12px 14px;border-radius:12px;font-size:14px;display:none}
+.msg.show{display:block}
+.msg.err{background:var(--under-soft);color:var(--ink)}
+.msg.info{background:var(--route-soft);color:var(--ink)}
+
+/* 결과: 하늘 게이지가 이 화면의 중심 */
+.result{display:none;margin-top:18px}
+.result.show{display:block}
+.skyline{display:flex;align-items:baseline;gap:10px}
+.skyline strong{font-size:46px;font-weight:800;letter-spacing:-.03em;line-height:1;color:var(--route)}
+.skyline span{font-size:15px;color:var(--muted)}
+.bar{display:flex;height:12px;border-radius:6px;overflow:hidden;background:var(--route);margin:12px 0 6px}
+.bar i{display:block;background:var(--under)}
+.meta{font-size:15px;margin-top:6px}
+.under-list{margin:12px 0 0;padding:0;list-style:none}
+.under-list li{display:flex;justify-content:space-between;gap:10px;padding:8px 12px;margin-top:6px;border-radius:10px;background:var(--under-soft);font-size:14px;cursor:pointer}
+.steps{margin:16px 0 0;padding:0 0 0 20px;font-size:14px}
+.steps li{padding:5px 0;border-bottom:1px solid var(--line)}
+.steps li span{color:var(--muted);margin-left:6px}
+h3{font-size:15px;margin:18px 0 0}
+.again{margin-top:14px;width:100%;padding:12px}
+@media (prefers-reduced-motion: reduce){.sheet,.sw i,.sw i::after{transition:none}}
+@media (min-width:760px){
+  .sheet{left:16px;right:auto;bottom:16px;top:16px;width:400px;max-height:none;border-radius:22px}
+  .sheet.min{transform:none}
+}
+</style>
+</head>
+<body>
+<div id="map" role="application" aria-label="지도"></div>
+
+<section class="sheet" id="sheet">
+  <button class="handle" id="handle" aria-expanded="true" aria-controls="sheetBody">
+    <span class="brand">트인길<small>터널·지하차도 없이 가는 길</small></span><span class="chev" id="chev">접기</span>
+  </button>
+  <div class="body" id="sheetBody">
+    <form id="form" autocomplete="off">
+      <label class="field"><span class="field-label">출발지</span>
+        <span class="inrow"><input type="text" id="from" placeholder="예: 인천시청" required>
+        <button type="button" class="ghost" id="here">현재 위치</button></span>
+        <div class="resolved" id="fromRes"></div>
+      </label>
+      <label class="field"><span class="field-label">목적지</span>
+        <span class="inrow"><input type="text" id="to" placeholder="예: 송도 센트럴파크" required></span>
+        <div class="resolved" id="toRes"></div>
+      </label>
+
+      <div class="toggles">
+        <label class="tog"><span><b>터널 피하기</b><em>산·도심 관통 터널을 지나지 않아요</em></span>
+          <span class="sw"><input type="checkbox" id="avoidTunnel" checked><i></i></span></label>
+        <label class="tog"><span><b>지하차도 피하기</b><em>교차로 아래로 내려가는 길을 지나지 않아요</em></span>
+          <span class="sw"><input type="checkbox" id="avoidUnder" checked><i></i></span></label>
+      </div>
+
+      <button class="go" id="go" type="submit">경로 탐색</button>
+    </form>
+
+    <div class="msg" id="msg" role="status"></div>
+
+    <div class="result" id="result" aria-live="polite">
+      <div class="skyline"><strong id="pct">100%</strong><span>하늘이 보이는 구간</span></div>
+      <div class="bar" id="bar" aria-hidden="true"></div>
+      <div class="meta" id="meta"></div>
+      <ul class="under-list" id="underList"></ul>
+      <h3>안내</h3>
+      <ol class="steps" id="steps"></ol>
+      <button class="ghost again" id="again" type="button">다시 검색</button>
+    </div>
+  </div>
+</section>
+
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
+<script>
+const $ = s => document.querySelector(s);
+const VALHALLA = 'https://valhalla1.openstreetmap.de';
+const MAX_EXCLUDE = 50;     // 공개 서버의 제외 지점 한도
+const MAX_ROUNDS = 8;
+
+/* ---------- 지도 ---------- */
+const map = L.map('map',{zoomControl:false}).setView([37.4563,126.7052],12);
+// 지도 배경: OpenFreeMap (API 키·가입 불필요). 불러오지 못하면 OSM 래스터 타일로 대체
+const dark = matchMedia('(prefers-color-scheme: dark)').matches;
+function rasterFallback(){
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png',{maxZoom:19,attribution:'© OpenStreetMap'}).addTo(map);
+}
+try{
+  if(!window.maplibregl || !L.maplibreGL) throw new Error('no maplibre');
+  const gl=L.maplibreGL({
+    style:`https://tiles.openfreemap.org/styles/${dark?'dark':'liberty'}`,
+    attribution:'<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> © OpenStreetMap'
+  }).addTo(map);
+  gl.getMaplibreMap().on('error',e=>console.warn('지도 배경 오류',e && e.error));
+  // 지명을 한국어로 표시
+  gl.getMaplibreMap().once('load',()=>{
+    const m=gl.getMaplibreMap();
+    m.getStyle().layers.forEach(l=>{
+      if(l.type==='symbol' && l.layout && l.layout['text-field'])
+        m.setLayoutProperty(l.id,'text-field',['coalesce',['get','name:ko'],['get','name']]);
+    });
+  });
+}catch(e){ rasterFallback(); }
+const layer = L.layerGroup().addTo(map);
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+
+/* ---------- 화면 ---------- */
+const sheet=$('#sheet'), handle=$('#handle');
+handle.onclick=()=>{ const m=sheet.classList.toggle('min'); handle.setAttribute('aria-expanded',!m); $('#chev').textContent=m?'펼치기':'접기'; };
+function showMsg(text,type='err'){ const m=$('#msg'); m.textContent=text; m.className='msg show '+type; }
+function clearMsg(){ $('#msg').className='msg'; }
+$('#from').addEventListener('input',()=>{ delete $('#from').dataset.lat; });
+
+$('#here').onclick=()=>{
+  if(!navigator.geolocation){ showMsg('이 브라우저는 위치 기능을 지원하지 않아요. 출발지를 직접 입력해 주세요.'); return; }
+  $('#here').textContent='찾는 중…';
+  navigator.geolocation.getCurrentPosition(p=>{
+    const f=$('#from'); f.value='현재 위치'; f.dataset.lat=p.coords.latitude; f.dataset.lng=p.coords.longitude;
+    $('#here').textContent='현재 위치'; map.setView([p.coords.latitude,p.coords.longitude],15);
+  },()=>{ $('#here').textContent='현재 위치'; showMsg('위치 권한이 꺼져 있어요. 휴대폰 설정에서 브라우저 위치 권한을 허용하거나 출발지를 직접 입력해 주세요.'); },
+  {enableHighAccuracy:true,timeout:10000});
+};
+
+/* ---------- 좌표 계산 ---------- */
+function hav(a,b){ const R=6371000,r=Math.PI/180; const dLat=(b[1]-a[1])*r,dLng=(b[0]-a[0])*r;
+  const x=Math.sin(dLat/2)**2+Math.cos(a[1]*r)*Math.cos(b[1]*r)*Math.sin(dLng/2)**2; return 2*R*Math.asin(Math.sqrt(x)); }
+function lineLen(c){ let s=0; for(let i=1;i<c.length;i++) s+=hav(c[i-1],c[i]); return s; }
+function bearing(a,b){ const r=Math.PI/180, dl=(b[0]-a[0])*r;
+  const y=Math.sin(dl)*Math.cos(b[1]*r), x=Math.cos(a[1]*r)*Math.sin(b[1]*r)-Math.sin(a[1]*r)*Math.cos(b[1]*r)*Math.cos(dl);
+  return Math.round((Math.atan2(y,x)/r+360)%360); }
+function midpointWithHeading(c){        // 선의 정중앙 좌표와 진행 방향
+  const half=lineLen(c)/2; let acc=0;
+  for(let i=1;i<c.length;i++){ const d=hav(c[i-1],c[i]);
+    if(acc+d>=half){ const t=d?(half-acc)/d:0;
+      return {lon:c[i-1][0]+(c[i][0]-c[i-1][0])*t, lat:c[i-1][1]+(c[i][1]-c[i-1][1])*t, heading:bearing(c[i-1],c[i])}; }
+    acc+=d; }
+  return {lon:c[0][0],lat:c[0][1],heading:bearing(c[0],c[c.length-1])};
+}
+function decode(str,prec=6){ let i=0,lat=0,lng=0; const out=[],f=10**prec;
+  while(i<str.length){ for(const k of [0,1]){ let b,s=0,r=0;
+      do{ b=str.charCodeAt(i++)-63; r|=(b&31)<<s; s+=5; }while(b>=32);
+      const d=(r&1)?~(r>>1):(r>>1); if(k===0) lat+=d; else lng+=d; }
+    out.push([lng/f,lat/f]); }
+  return out; }
+const km = m => m>=1000 ? (m/1000).toFixed(1)+'km' : Math.round(m)+'m';
+const mins = s => { const t=Math.round(s/60); return t>=60 ? `${Math.floor(t/60)}시간 ${t%60}분` : `${t}분`; };
+
+/* ---------- 1·2단계: 장소 검색 ---------- */
+async function geocode(input){
+  if(input.dataset.lat) return {lat:+input.dataset.lat,lng:+input.dataset.lng,label:'현재 위치'};
+  const q=input.value.trim();
+  const m=q.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
+  if(m) return {lat:+m[1],lng:+m[2],label:q};
+  const r=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=kr&accept-language=ko&q=${encodeURIComponent(q)}`);
+  if(!r.ok) throw new Error('장소 검색 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.');
+  const j=await r.json();
+  if(!j.length) throw new Error(`"${q}"을(를) 찾지 못했어요. 시·구 이름을 붙이거나 더 정확한 장소명을 입력해 주세요.`);
+  return {lat:+j[0].lat,lng:+j[0].lon,label:j[0].display_name};
+}
+
+/* ---------- 터널 / 지하차도 구분 ---------- */
+function kindOf(name,lengthM){
+  if(/지하차도|지하도|underpass/i.test(name)) return 'underpass';
+  if(/터널|tunnel/i.test(name)) return 'tunnel';
+  return lengthM<500 ? 'underpass' : 'tunnel';      // 이름이 없으면 짧은 것을 지하차도로 간주
+}
+
+/* ---------- 5단계: 경로 계산 (Valhalla) ---------- */
+async function post(path,body){
+  const r=await fetch(VALHALLA+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+  const j=await r.json().catch(()=>({}));
+  if(r.status===429) throw Object.assign(new Error('경로 서버 사용량이 많아요. 1분쯤 뒤에 다시 시도해 주세요.'),{fatal:true});
+  if(!r.ok) throw Object.assign(new Error(j.error||`경로 서버 오류 (${r.status})`),{code:j.error_code});
+  return j;
+}
+let lang='ko-KR';
+async function route(a,b,excludes){
+  const body={locations:[{lat:a.lat,lon:a.lng},{lat:b.lat,lon:b.lng}],costing:'auto',
+    directions_options:{units:'kilometers',language:lang}};
+  if(excludes.length) body.exclude_locations=excludes.map(e=>({lat:e.lat,lon:e.lon,heading:e.heading,heading_tolerance:30,radius:3}));
+  try{ return (await post('/route',body)).trip; }
+  catch(e){
+    if(lang && /language/i.test(e.message)){ lang=null; delete body.directions_options.language; return (await post('/route',body)).trip; }
+    throw e;
+  }
+}
+// 경로가 실제로 지나는 도로를 하나씩 확인해 지하 구간을 찾아냄
+async function findUnderground(shapeStr){
+  const j=await post('/trace_attributes',{encoded_polyline:shapeStr,shape_match:'edge_walk',costing:'auto',
+    filters:{attributes:['edge.tunnel','edge.names','edge.begin_shape_index','edge.end_shape_index','shape'],action:'include'}});
+  const shape=j.shape?decode(j.shape):decode(shapeStr);
+  const segs=[]; let cur=null;
+  for(const e of (j.edges||[])){
+    if(e.tunnel){
+      if(!cur){ cur={from:e.begin_shape_index,to:e.end_shape_index,names:new Set()}; segs.push(cur); }
+      cur.to=e.end_shape_index; (e.names||[]).forEach(n=>cur.names.add(n));
+    } else cur=null;
+  }
+  return segs.map(s=>{ const coords=shape.slice(s.from,s.to+1), len=lineLen(coords), name=[...s.names].join(' ');
+    return {coords,len,name,kind:kindOf(name,len)}; });
+}
+
+/* ---------- 6단계: 지도 표시 ---------- */
+function draw(a,b,trip,under,status,avoidT,avoidU){
+  layer.clearLayers();
+  const coords=decode(trip.legs[0].shape).map(([x,y])=>[y,x]);
+  L.polyline(coords,{color:css('--route'),weight:7,opacity:.9}).addTo(layer);
+  const ul=$('#underList'); ul.innerHTML='';
+  under.forEach(u=>{
+    const label=(u.kind==='tunnel'?'터널':'지하차도')+(u.name?` · ${u.name}`:'');
+    const pl=L.polyline(u.coords.map(([x,y])=>[y,x]),{color:css('--under'),weight:9}).bindPopup(`${label} (${km(u.len)})`).addTo(layer);
+    const li=document.createElement('li'); li.innerHTML=`<span></span><span>${km(u.len)}</span>`; li.firstChild.textContent=label;
+    li.onclick=()=>{ map.fitBounds(pl.getBounds(),{maxZoom:16}); pl.openPopup(); }; ul.appendChild(li);
+  });
+  L.circleMarker([a.lat,a.lng],{radius:9,color:'#fff',weight:3,fillColor:css('--route'),fillOpacity:1}).bindTooltip('출발').addTo(layer);
+  L.circleMarker([b.lat,b.lng],{radius:9,color:'#fff',weight:3,fillColor:css('--ink'),fillOpacity:1}).bindTooltip('도착').addTo(layer);
+  map.fitBounds(L.latLngBounds(coords),{padding:[30,30]});
+
+  const total=trip.summary.length*1000, underLen=under.reduce((s,u)=>s+u.len,0);
+  const pct=Math.max(0,Math.min(100,100-underLen/total*100));
+  $('#pct').textContent=(pct>=99.95?100:pct.toFixed(1))+'%';
+  $('#bar').innerHTML=under.length?`<i style="width:${Math.max(1.5,100-pct)}%;margin-left:auto"></i>`:'';
+  const t=under.filter(u=>u.kind==='tunnel').length;
+  $('#meta').textContent=`${km(total)} · 약 ${mins(trip.summary.time)} · `+(under.length?`터널 ${t}곳, 지하차도 ${under.length-t}곳 포함`:'터널·지하차도 없음');
+
+  const blocked=under.some(u=>(u.kind==='tunnel'&&avoidT)||(u.kind==='underpass'&&avoidU));
+  if(status==='unknown') showMsg('지하 구간 정보를 확인하지 못해 일반 경로를 보여 드려요. 잠시 후 다시 검색해 주세요.');
+  else if(blocked) showMsg('피할 수 없는 지하 구간이 남아 있어요. 가장 적게 지나는 길을 보여 드려요. 주황색 구간을 미리 확인하세요.');
+  else if(under.length) showMsg(`피하도록 설정하지 않은 ${avoidT?'지하차도':'터널'} 구간이 주황색으로 표시돼요.`,'info');
+
+  const ol=$('#steps'); ol.innerHTML='';
+  (trip.legs[0].maneuvers||[]).forEach(s=>{ const li=document.createElement('li'); li.textContent=s.instruction;
+    if(s.length){ const sp=document.createElement('span'); sp.textContent=km(s.length*1000); li.appendChild(sp); } ol.appendChild(li); });
+  $('#form').hidden=true; $('#result').classList.add('show');
+}
+$('#again').onclick=()=>{ $('#result').classList.remove('show'); $('#form').hidden=false; clearMsg(); };
+
+/* ---------- 실행: 경로를 찾고, 지하 구간이 있으면 그 구간을 막고 다시 찾기를 반복 ---------- */
+$('#form').addEventListener('submit',async ev=>{
+  ev.preventDefault(); clearMsg();
+  const go=$('#go'); go.disabled=true; go.textContent='경로를 찾는 중…';
+  try{
+    const [a,b]=await Promise.all([geocode($('#from')),geocode($('#to'))]);
+    $('#fromRes').textContent=a.label; $('#toRes').textContent=b.label;
+    const avoidT=$('#avoidTunnel').checked, avoidU=$('#avoidUnder').checked;
+
+    let excludes=[], best=null;
+    for(let round=0; round<MAX_ROUNDS; round++){
+      let trip;
+      try{ trip=await route(a,b,excludes); }
+      catch(e){ if(e.fatal||!best) throw e; break; }      // 더 막으면 길이 없어짐 → 직전 경로 사용
+      let under;
+      try{ under=await findUnderground(trip.legs[0].shape); }
+      catch(e){ if(e.fatal) throw e; best=best||{trip,under:[],status:'unknown'}; break; }
+      best={trip,under,status:'ok'};
+      const toBlock=under.filter(u=>(u.kind==='tunnel'&&avoidT)||(u.kind==='underpass'&&avoidU));
+      if(!toBlock.length || excludes.length+toBlock.length>MAX_EXCLUDE) break;
+      excludes=excludes.concat(toBlock.map(u=>midpointWithHeading(u.coords)));
+      go.textContent=`지하 구간 ${excludes.length}곳 피하는 중…`;
+    }
+    draw(a,b,best.trip,best.under,best.status,avoidT,avoidU);
+  }catch(e){
+    const noPath=e.code===442||/no path/i.test(e.message||'');
+    showMsg(noPath?'두 장소를 잇는 차도를 찾지 못했어요. 출발지와 목적지를 도로 가까운 곳으로 바꿔 보세요.':(e.message||'경로를 찾지 못했어요.'));
+  }finally{ go.disabled=false; go.textContent='경로 탐색'; }
+});
+
+</script>
+</body>
+</html>
