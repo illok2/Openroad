@@ -88,7 +88,17 @@ details.key a{color:var(--route)}
 .bar i{display:block;background:var(--under)}
 .meta{font-size:15px;margin-top:6px}
 .under-list{margin:12px 0 0;padding:0;list-style:none}
-.under-list li{display:flex;justify-content:space-between;gap:10px;padding:8px 12px;margin-top:6px;border-radius:10px;background:var(--under-soft);font-size:14px;cursor:pointer}
+.under-list li{display:flex;align-items:center;gap:10px;padding:8px 8px 8px 12px;margin-top:6px;border-radius:10px;background:var(--under-soft);font-size:14px;cursor:pointer}
+.under-list .u-name{flex:1;min-width:0}
+.under-list .u-len{color:var(--muted);white-space:nowrap}
+.u-avoid{font:inherit;font-size:13px;font-weight:600;border:1.5px solid var(--under);color:var(--ink);background:var(--panel);border-radius:9px;padding:6px 9px;cursor:pointer;white-space:nowrap}
+.cands{display:flex;gap:8px;overflow-x:auto;margin-bottom:16px;padding-bottom:2px}
+.cands[hidden]{display:none}
+.cand{flex:1 0 108px;text-align:left;font:inherit;color:var(--ink);background:var(--panel);border:1.5px solid var(--line);border-radius:14px;padding:10px 12px;cursor:pointer}
+.cand[aria-checked="true"]{border-color:var(--route);background:var(--route-soft)}
+.cand b{display:block;font-size:13px;color:var(--route)}
+.cand span{display:block;font-size:18px;font-weight:800;letter-spacing:-.02em}
+.cand em{display:block;font-style:normal;font-size:12px;color:var(--muted)}
 .steps{margin:16px 0 0;padding:0 0 0 20px;font-size:14px}
 .steps li{padding:5px 0;border-bottom:1px solid var(--line)}
 .steps li span{color:var(--muted);margin-left:6px}
@@ -128,12 +138,13 @@ h3{font-size:15px;margin:18px 0 0}
       </div>
 
       <button class="go" id="go" type="submit">경로 탐색</button>
-      <button class="ghost install" id="install" type="button" hidden>홈 화면에 앱 설치</button>
+      <button class="ghost install" id="install" type="button">홈 화면에 앱 설치</button>
     </form>
 
     <div class="msg" id="msg" role="status"></div>
 
     <div class="result" id="result" aria-live="polite">
+      <div class="cands" id="cands" role="radiogroup" aria-label="경로 후보" hidden></div>
       <div class="skyline"><strong id="pct">100%</strong><span>하늘이 보이는 구간</span></div>
       <div class="bar" id="bar" aria-hidden="true"></div>
       <div class="meta" id="meta"></div>
@@ -251,13 +262,17 @@ async function post(path,body){
   return j;
 }
 let lang='ko-KR';
-async function route(a,b,excludes){
+// 경로 1개(+ alternates개의 다른 길)를 받아 trip 배열로 돌려줌
+async function route(a,b,excludes,alternates=0){
   const body={locations:[{lat:a.lat,lon:a.lng},{lat:b.lat,lon:b.lng}],costing:'auto',
     directions_options:{units:'kilometers',language:lang}};
   if(excludes.length) body.exclude_locations=excludes.map(e=>({lat:e.lat,lon:e.lon,heading:e.heading,heading_tolerance:30,radius:3}));
-  try{ return (await post('/route',body)).trip; }
+  if(alternates) body.alternates=alternates;
+  const pack=j=>[j.trip,...(j.alternates||[]).map(x=>x.trip)].filter(Boolean);
+  try{ return pack(await post('/route',body)); }
   catch(e){
-    if(lang && /language/i.test(e.message)){ lang=null; delete body.directions_options.language; return (await post('/route',body)).trip; }
+    if(lang && /language/i.test(e.message)){ lang=null; delete body.directions_options.language; return pack(await post('/route',body)); }
+    if(alternates && !e.fatal && e.code!==442){ delete body.alternates; return pack(await post('/route',body)); }
     throw e;
   }
 }
@@ -277,82 +292,204 @@ async function findUnderground(shapeStr){
     return {coords,len,name,kind:kindOf(name,len)}; });
 }
 
+/* ---------- 경로 후보 관리 ---------- */
+const state={a:null,b:null,avoidT:true,avoidU:true,cands:[],sel:0,manual:[]};
+const avoided=u=>(u.kind==='tunnel'&&state.avoidT)||(u.kind==='underpass'&&state.avoidU);
+function score(c){
+  c.dist=c.trip.summary.length*1000; c.time=c.trip.summary.time;
+  c.underLen=c.under.reduce((s,u)=>s+u.len,0);
+  c.blocked=c.under.filter(avoided).reduce((s,u)=>s+u.len,0);
+  return c;
+}
+function addCand(list,c){
+  score(c);
+  const dup=list.find(x=>Math.abs(x.dist-c.dist)<x.dist*0.01 && Math.abs(x.time-c.time)<Math.max(30,x.time*0.01));
+  if(dup) return dup;
+  list.push(c); return c;
+}
+// 후보 중 최대 3개: 지하 가장 적음 / 가장 빠름 / 그 사이 균형
+function pickCands(list){
+  const byUnder=[...list].sort((x,y)=>x.blocked-y.blocked||x.time-y.time);
+  const fastest=[...list].sort((x,y)=>x.time-y.time)[0];
+  const out=[byUnder[0]];
+  if(fastest!==byUnder[0]) out.push(fastest);
+  const mid=byUnder.find(c=>!out.includes(c) && c.blocked<fastest.blocked);
+  if(mid) out.splice(1,0,mid);
+  out.forEach(c=>c.tag=null);
+  out[0].tag = out[0].blocked===0 && (state.avoidT||state.avoidU) ? '지하 없음' : '지하 가장 적음';
+  if(fastest!==out[0]) fastest.tag='가장 빠름'; else if(out.length===1) out[0].tag=(state.avoidT||state.avoidU)?out[0].tag:'추천';
+  if(mid) mid.tag='균형';
+  return out;
+}
+
+/* ---------- 경로 찾기: 지하 구간이 나오면 막고 다시 찾기를 반복하며 후보를 모음 ---------- */
+async function search(progress){
+  const {a,b}=state; const all=[];
+  let excludes=state.manual.slice();
+  for(let round=0; round<MAX_ROUNDS; round++){
+    let trips;
+    try{ trips=await route(a,b,excludes,round===0?2:0); }
+    catch(e){ if(e.fatal||!all.length) throw e; break; }   // 더 막으면 길이 없어짐
+    let main=null;
+    for(let k=0;k<trips.length;k++){
+      let under, unknown=false;
+      try{ under=await findUnderground(trips[k].legs[0].shape); }
+      catch(e){ if(e.fatal) throw e; if(k>0) continue; under=[]; unknown=true; }
+      const before=all.length, c=addCand(all,{trip:trips[k],under,unknown});
+      if(k===0) main = all.length>before ? c : null;      // 같은 길이 또 나오면 더 진행해도 소용없음
+    }
+    if(!main || main.unknown) break;
+    const toBlock=main.under.filter(avoided);
+    if(!toBlock.length || excludes.length+toBlock.length>MAX_EXCLUDE) break;
+    excludes=excludes.concat(toBlock.map(u=>midpointWithHeading(u.coords)));
+    progress(`지하 구간 ${excludes.length}곳 피하는 중…`);
+  }
+  // 마지막으로 찾은 우회로 주변의 다른 길도 후보로 추가
+  if(excludes.length>state.manual.length){
+    try{
+      const trips=await route(a,b,excludes,2);
+      for(const t of trips.slice(1)){ try{ addCand(all,{trip:t,under:await findUnderground(t.legs[0].shape)}); }catch(e){} }
+    }catch(e){}
+  }
+  return all;
+}
+
 /* ---------- 6단계: 지도 표시 ---------- */
-function draw(a,b,trip,under,status,avoidT,avoidU){
+function labelOf(u){ return (u.kind==='tunnel'?'터널':'지하차도')+(u.name?` · ${u.name}`:''); }
+function summaryOf(c){
+  if(c.unknown) return '지하 구간 확인 못 함';
+  if(!c.under.length) return '지하 구간 없음';
+  return `지하 ${c.under.length}곳 · ${km(c.underLen)}`;
+}
+function draw(){
+  const {a,b}=state, c=state.cands[state.sel], trip=c.trip;
   layer.clearLayers();
+  // 고르지 않은 후보는 회색으로, 누르면 선택
+  state.cands.forEach((o,i)=>{ if(i===state.sel) return;
+    L.polyline(decode(o.trip.legs[0].shape).map(([x,y])=>[y,x]),{color:css('--muted'),weight:6,opacity:.55})
+      .on('click',()=>{ state.sel=i; draw(); }).addTo(layer); });
   const coords=decode(trip.legs[0].shape).map(([x,y])=>[y,x]);
-  L.polyline(coords,{color:css('--route'),weight:7,opacity:.9}).addTo(layer);
+  L.polyline(coords,{color:css('--route'),weight:7,opacity:.95}).addTo(layer);
+
+  // 후보 카드
+  const box=$('#cands'); box.innerHTML='';
+  box.hidden = state.cands.length<2;
+  state.cands.forEach((o,i)=>{
+    const btn=document.createElement('button'); btn.type='button'; btn.className='cand';
+    btn.setAttribute('role','radio'); btn.setAttribute('aria-checked',i===state.sel);
+    btn.innerHTML='<b></b><span></span><em></em>';
+    btn.children[0].textContent=o.tag||`후보 ${i+1}`;
+    btn.children[1].textContent=mins(o.time);
+    btn.children[2].textContent=`${km(o.dist)} · ${summaryOf(o)}`;
+    btn.onclick=()=>{ state.sel=i; draw(); };
+    box.appendChild(btn);
+  });
+
+  // 지하 구간 목록 + 구간별 우회 버튼
   const ul=$('#underList'); ul.innerHTML='';
-  under.forEach(u=>{
-    const label=(u.kind==='tunnel'?'터널':'지하차도')+(u.name?` · ${u.name}`:'');
-    const pl=L.polyline(u.coords.map(([x,y])=>[y,x]),{color:css('--under'),weight:9}).bindPopup(`${label} (${km(u.len)})`).addTo(layer);
-    const li=document.createElement('li'); li.innerHTML=`<span></span><span>${km(u.len)}</span>`; li.firstChild.textContent=label;
-    li.onclick=()=>{ map.fitBounds(pl.getBounds(),{maxZoom:16}); pl.openPopup(); }; ul.appendChild(li);
+  c.under.forEach(u=>{
+    const pl=L.polyline(u.coords.map(([x,y])=>[y,x]),{color:css('--under'),weight:9}).bindPopup(`${labelOf(u)} (${km(u.len)})`).addTo(layer);
+    const li=document.createElement('li');
+    li.innerHTML='<span class="u-name"></span><span class="u-len"></span><button type="button" class="u-avoid">이 구간 피하기</button>';
+    li.children[0].textContent=labelOf(u); li.children[1].textContent=km(u.len);
+    li.onclick=()=>{ map.fitBounds(pl.getBounds(),{maxZoom:16}); pl.openPopup(); };
+    li.children[2].onclick=ev=>{ ev.stopPropagation(); avoidSegment(u); };
+    ul.appendChild(li);
   });
   L.circleMarker([a.lat,a.lng],{radius:9,color:'#fff',weight:3,fillColor:css('--route'),fillOpacity:1}).bindTooltip('출발').addTo(layer);
   L.circleMarker([b.lat,b.lng],{radius:9,color:'#fff',weight:3,fillColor:css('--ink'),fillOpacity:1}).bindTooltip('도착').addTo(layer);
   map.fitBounds(L.latLngBounds(coords),{padding:[30,30]});
 
-  const total=trip.summary.length*1000, underLen=under.reduce((s,u)=>s+u.len,0);
-  const pct=Math.max(0,Math.min(100,100-underLen/total*100));
+  const pct=Math.max(0,Math.min(100,100-c.underLen/c.dist*100));
   $('#pct').textContent=(pct>=99.95?100:pct.toFixed(1))+'%';
-  $('#bar').innerHTML=under.length?`<i style="width:${Math.max(1.5,100-pct)}%;margin-left:auto"></i>`:'';
-  const t=under.filter(u=>u.kind==='tunnel').length;
-  $('#meta').textContent=`${km(total)} · 약 ${mins(trip.summary.time)} · `+(under.length?`터널 ${t}곳, 지하차도 ${under.length-t}곳 포함`:'터널·지하차도 없음');
+  $('#bar').innerHTML=c.under.length?`<i style="width:${Math.max(1.5,100-pct)}%;margin-left:auto"></i>`:'';
+  const t=c.under.filter(u=>u.kind==='tunnel').length;
+  $('#meta').textContent=`${km(c.dist)} · 약 ${mins(c.time)} · `+(c.under.length?`터널 ${t}곳, 지하차도 ${c.under.length-t}곳 포함`:'터널·지하차도 없음');
 
-  const blocked=under.some(u=>(u.kind==='tunnel'&&avoidT)||(u.kind==='underpass'&&avoidU));
-  if(status==='unknown') showMsg('지하 구간 정보를 확인하지 못해 일반 경로를 보여 드려요. 잠시 후 다시 검색해 주세요.');
-  else if(blocked) showMsg('피할 수 없는 지하 구간이 남아 있어요. 가장 적게 지나는 길을 보여 드려요. 주황색 구간을 미리 확인하세요.');
-  else if(under.length) showMsg(`피하도록 설정하지 않은 ${avoidT?'지하차도':'터널'} 구간이 주황색으로 표시돼요.`,'info');
+  clearMsg();
+  if(c.unknown) showMsg('지하 구간 정보를 확인하지 못해 일반 경로를 보여 드려요. 잠시 후 다시 검색해 주세요.');
+  else if(c.blocked>0){
+    const better=state.cands.find(o=>o.blocked<c.blocked);
+    showMsg(better ? `지하 구간이 더 적은 후보가 있어요. 위의 '${better.tag||'다른 후보'}'를 눌러 비교해 보세요.`
+                   : '자동으로 피할 수 없는 지하 구간이 남아 있어요. 아래 목록의 \'이 구간 피하기\'를 누르면 그 구간을 막고 다른 길을 찾아봐요.');
+  }
+  else if(c.under.length) showMsg(`피하도록 설정하지 않은 ${state.avoidT?'지하차도':'터널'} 구간이 주황색으로 표시돼요. 필요하면 '이 구간 피하기'를 눌러 보세요.`,'info');
 
   const ol=$('#steps'); ol.innerHTML='';
   (trip.legs[0].maneuvers||[]).forEach(s=>{ const li=document.createElement('li'); li.textContent=s.instruction;
     if(s.length){ const sp=document.createElement('span'); sp.textContent=km(s.length*1000); li.appendChild(sp); } ol.appendChild(li); });
   $('#form').hidden=true; $('#result').classList.add('show');
 }
+
+/* ---------- 구간별 우회 ---------- */
+let busy=false;
+async function avoidSegment(u){
+  if(busy) return; busy=true;
+  const pt=midpointWithHeading(u.coords);
+  state.manual.push(pt);
+  showMsg(`${labelOf(u)} 구간을 피하는 길을 찾는 중…`,'info');
+  try{
+    const all=await search(t=>showMsg(t,'info'));
+    const still=all.every(c=>c.under.some(x=>hav([x.coords[0][0],x.coords[0][1]],u.coords[0])<30));
+    if(still){ state.manual.pop(); showMsg(`${labelOf(u)} 구간을 피해서 가는 길이 없어요. 지금 경로를 그대로 쓰는 것이 가장 짧은 지하 구간이에요.`); busy=false; return; }
+    state.cands=pickCands(all); state.sel=0; draw();
+  }catch(e){
+    state.manual.pop();
+    const noPath=e.code===442||/no path/i.test(e.message||'');
+    showMsg(noPath?`${labelOf(u)} 구간을 피해서 가는 길이 없어요.`:(e.message||'다른 길을 찾지 못했어요.'));
+  }
+  busy=false;
+}
+
 /* ---------- PWA: 설치·오프라인 ---------- */
 if('serviceWorker' in navigator && location.protocol==='https:'){
   window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
 }
 let installPrompt=null;
-window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); installPrompt=e; $('#install').hidden=false; });
-$('#install').onclick=async()=>{ if(!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice; installPrompt=null; $('#install').hidden=true; };
+const isInstalled = matchMedia('(display-mode: standalone)').matches || navigator.standalone===true;
+if(isInstalled) $('#install').hidden=true;
+window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); installPrompt=e; });
+$('#install').onclick=async()=>{
+  if(installPrompt){
+    installPrompt.prompt(); const r=await installPrompt.userChoice; installPrompt=null;
+    if(r.outcome==='accepted') $('#install').hidden=true;
+    return;
+  }
+  const ua=navigator.userAgent;
+  let how;
+  if(/KAKAOTALK|NAVER|Instagram|FBAN|FBAV|Line\//i.test(ua))
+    how='지금은 앱 안의 내장 브라우저로 열려 있어서 설치할 수 없어요. 오른쪽 위 메뉴에서 \'다른 브라우저로 열기\'를 누른 뒤 다시 시도해 주세요.';
+  else if(/SamsungBrowser/i.test(ua))
+    how='삼성 인터넷: 주소창 옆 설치 아이콘(↓)을 누르거나, 하단 ≡ 메뉴 → \'현재 페이지 추가\' → \'홈 화면\'을 눌러 주세요.';
+  else if(/Android/i.test(ua))
+    how='크롬: 오른쪽 위 ⋮ 메뉴 → \'앱 설치\' 또는 \'홈 화면에 추가\' → \'설치\'를 눌러 주세요. 이미 설치돼 있다면 앱 목록에서 트인길을 찾아 열어 주세요.';
+  else if(/iPhone|iPad/i.test(ua))
+    how='사파리: 아래쪽 공유 버튼 → \'홈 화면에 추가\'를 눌러 주세요.';
+  else
+    how='PC 크롬·엣지: 주소창 오른쪽의 설치 아이콘을 누르거나, 메뉴에서 \'앱 설치\'를 눌러 주세요.';
+  showMsg(how,'info');
+};
 window.addEventListener('appinstalled',()=>{ $('#install').hidden=true; });
 window.addEventListener('offline',()=>showMsg('인터넷 연결이 끊겼어요. 지도와 경로 검색은 연결된 뒤에 다시 할 수 있어요.'));
 window.addEventListener('online',clearMsg);
 
-$('#again').onclick=()=>{ $('#result').classList.remove('show'); $('#form').hidden=false; clearMsg(); };
+$('#again').onclick=()=>{ $('#result').classList.remove('show'); $('#form').hidden=false; state.manual=[]; clearMsg(); };
 
-/* ---------- 실행: 경로를 찾고, 지하 구간이 있으면 그 구간을 막고 다시 찾기를 반복 ---------- */
+/* ---------- 실행 ---------- */
 $('#form').addEventListener('submit',async ev=>{
   ev.preventDefault(); clearMsg();
   const go=$('#go'); go.disabled=true; go.textContent='경로를 찾는 중…';
   try{
     const [a,b]=await Promise.all([geocode($('#from')),geocode($('#to'))]);
     $('#fromRes').textContent=a.label; $('#toRes').textContent=b.label;
-    const avoidT=$('#avoidTunnel').checked, avoidU=$('#avoidUnder').checked;
-
-    let excludes=[], best=null;
-    for(let round=0; round<MAX_ROUNDS; round++){
-      let trip;
-      try{ trip=await route(a,b,excludes); }
-      catch(e){ if(e.fatal||!best) throw e; break; }      // 더 막으면 길이 없어짐 → 직전 경로 사용
-      let under;
-      try{ under=await findUnderground(trip.legs[0].shape); }
-      catch(e){ if(e.fatal) throw e; best=best||{trip,under:[],status:'unknown'}; break; }
-      best={trip,under,status:'ok'};
-      const toBlock=under.filter(u=>(u.kind==='tunnel'&&avoidT)||(u.kind==='underpass'&&avoidU));
-      if(!toBlock.length || excludes.length+toBlock.length>MAX_EXCLUDE) break;
-      excludes=excludes.concat(toBlock.map(u=>midpointWithHeading(u.coords)));
-      go.textContent=`지하 구간 ${excludes.length}곳 피하는 중…`;
-    }
-    draw(a,b,best.trip,best.under,best.status,avoidT,avoidU);
+    Object.assign(state,{a,b,avoidT:$('#avoidTunnel').checked,avoidU:$('#avoidUnder').checked,manual:[]});
+    const all=await search(t=>{ go.textContent=t; });
+    state.cands=pickCands(all); state.sel=0; draw();
   }catch(e){
     const noPath=e.code===442||/no path/i.test(e.message||'');
     showMsg(noPath?'두 장소를 잇는 차도를 찾지 못했어요. 출발지와 목적지를 도로 가까운 곳으로 바꿔 보세요.':(e.message||'경로를 찾지 못했어요.'));
   }finally{ go.disabled=false; go.textContent='경로 탐색'; }
 });
-
 </script>
 </body>
 </html>
