@@ -3,8 +3,14 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#E6F1F7">
-<title>트인길 — 터널·지하차도 회피 내비</title>
+<meta name="theme-color" content="#1F7F86">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="트인길">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" type="image/png" href="favicon.png">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<title>트인길 Openroad</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css">
 <style>
@@ -59,6 +65,8 @@ input:focus-visible,button:focus-visible{outline:3px solid var(--focus);outline-
 .sw input:focus-visible + i{outline:3px solid var(--focus);outline-offset:2px}
 
 .go{display:block;width:100%;margin-top:18px;font:inherit;font-size:17px;font-weight:700;border:0;border-radius:14px;padding:15px;background:var(--route);color:#fff;cursor:pointer}
+.install{display:block;width:100%;margin-top:10px;padding:12px}
+.install[hidden]{display:none}
 .go:disabled{opacity:.6;cursor:progress}
 details.key{margin-top:14px;font-size:14px;color:var(--muted)}
 details.key summary{cursor:pointer}
@@ -120,6 +128,7 @@ h3{font-size:15px;margin:18px 0 0}
       </div>
 
       <button class="go" id="go" type="submit">경로 탐색</button>
+      <button class="ghost install" id="install" type="button" hidden>홈 화면에 앱 설치</button>
     </form>
 
     <div class="msg" id="msg" role="status"></div>
@@ -301,6 +310,17 @@ function draw(a,b,trip,under,status,avoidT,avoidU){
     if(s.length){ const sp=document.createElement('span'); sp.textContent=km(s.length*1000); li.appendChild(sp); } ol.appendChild(li); });
   $('#form').hidden=true; $('#result').classList.add('show');
 }
+/* ---------- PWA: 설치·오프라인 ---------- */
+if('serviceWorker' in navigator && location.protocol==='https:'){
+  window.addEventListener('load',()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
+}
+let installPrompt=null;
+window.addEventListener('beforeinstallprompt',e=>{ e.preventDefault(); installPrompt=e; $('#install').hidden=false; });
+$('#install').onclick=async()=>{ if(!installPrompt) return; installPrompt.prompt(); await installPrompt.userChoice; installPrompt=null; $('#install').hidden=true; };
+window.addEventListener('appinstalled',()=>{ $('#install').hidden=true; });
+window.addEventListener('offline',()=>showMsg('인터넷 연결이 끊겼어요. 지도와 경로 검색은 연결된 뒤에 다시 할 수 있어요.'));
+window.addEventListener('online',clearMsg);
+
 $('#again').onclick=()=>{ $('#result').classList.remove('show'); $('#form').hidden=false; clearMsg(); };
 
 /* ---------- 실행: 경로를 찾고, 지하 구간이 있으면 그 구간을 막고 다시 찾기를 반복 ---------- */
