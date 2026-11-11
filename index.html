@@ -94,6 +94,8 @@ details.key a{color:var(--route)}
 .u-avoid{font:inherit;font-size:13px;font-weight:600;border:1.5px solid var(--under);color:var(--ink);background:var(--panel);border-radius:9px;padding:6px 9px;cursor:pointer;white-space:nowrap}
 .cands{display:flex;gap:8px;overflow-x:auto;margin-bottom:16px;padding-bottom:2px}
 .cands[hidden]{display:none}
+.cand-note{margin:0 0 12px;font-size:13px;color:var(--muted)}
+.cand-note:empty{display:none}
 .cand{flex:1 0 108px;text-align:left;font:inherit;color:var(--ink);background:var(--panel);border:1.5px solid var(--line);border-radius:14px;padding:10px 12px;cursor:pointer}
 .cand[aria-checked="true"]{border-color:var(--route);background:var(--route-soft)}
 .cand b{display:block;font-size:13px;color:var(--route)}
@@ -145,6 +147,7 @@ h3{font-size:15px;margin:18px 0 0}
 
     <div class="result" id="result" aria-live="polite">
       <div class="cands" id="cands" role="radiogroup" aria-label="경로 후보" hidden></div>
+      <p class="cand-note" id="candNote"></p>
       <div class="skyline"><strong id="pct">100%</strong><span>하늘이 보이는 구간</span></div>
       <div class="bar" id="bar" aria-hidden="true"></div>
       <div class="meta" id="meta"></div>
@@ -263,9 +266,10 @@ async function post(path,body){
 }
 let lang='ko-KR';
 // 경로 1개(+ alternates개의 다른 길)를 받아 trip 배열로 돌려줌
-async function route(a,b,excludes,alternates=0){
+async function route(a,b,excludes,alternates=0,opts=null){
   const body={locations:[{lat:a.lat,lon:a.lng},{lat:b.lat,lon:b.lng}],costing:'auto',
     directions_options:{units:'kilometers',language:lang}};
+  if(opts) body.costing_options={auto:opts};
   if(excludes.length) body.exclude_locations=excludes.map(e=>({lat:e.lat,lon:e.lon,heading:e.heading,heading_tolerance:30,radius:3}));
   if(alternates) body.alternates=alternates;
   const pack=j=>[j.trip,...(j.alternates||[]).map(x=>x.trip)].filter(Boolean);
@@ -307,50 +311,61 @@ function addCand(list,c){
   if(dup) return dup;
   list.push(c); return c;
 }
-// 후보 중 최대 3개: 지하 가장 적음 / 가장 빠름 / 그 사이 균형
+// 후보 중 최대 3개: 지하 가장 적음 / 가장 빠름 / 그 사이(또는 다른 길)
 function pickCands(list){
-  const byUnder=[...list].sort((x,y)=>x.blocked-y.blocked||x.time-y.time);
-  const fastest=[...list].sort((x,y)=>x.time-y.time)[0];
-  const out=[byUnder[0]];
-  if(fastest!==byUnder[0]) out.push(fastest);
-  const mid=byUnder.find(c=>!out.includes(c) && c.blocked<fastest.blocked);
+  const any=state.avoidT||state.avoidU, m=c=>any?c.blocked:c.underLen;
+  const byUnder=[...list].sort((x,y)=>m(x)-m(y)||x.time-y.time);
+  const byTime=[...list].sort((x,y)=>x.time-y.time);
+  const best=byUnder[0], fastest=byTime[0];
+  list.forEach(c=>c.tag=null);
+  const out=[best];
+  if(fastest!==best) out.push(fastest);
+  const mid=byTime.find(c=>!out.includes(c) && m(c)<m(fastest) && c.time<best.time);
   if(mid) out.splice(1,0,mid);
-  out.forEach(c=>c.tag=null);
-  out[0].tag = out[0].blocked===0 && (state.avoidT||state.avoidU) ? '지하 없음' : '지하 가장 적음';
-  if(fastest!==out[0]) fastest.tag='가장 빠름'; else if(out.length===1) out[0].tag=(state.avoidT||state.avoidU)?out[0].tag:'추천';
+  for(const c of byTime){ if(out.length>=3) break; if(!out.includes(c)) out.push(c); }
+  best.tag = m(best)===0 ? '지하 없음' : '지하 가장 적음';
+  if(fastest!==best) fastest.tag='가장 빠름';
   if(mid) mid.tag='균형';
-  return out;
+  out.forEach(c=>{ if(!c.tag) c.tag='다른 길'; });
+  return out.sort((x,y)=>m(x)-m(y)||x.time-y.time);
 }
 
-/* ---------- 경로 찾기: 지하 구간이 나오면 막고 다시 찾기를 반복하며 후보를 모음 ---------- */
-async function search(progress){
-  const {a,b}=state; const all=[];
-  let excludes=state.manual.slice();
-  for(let round=0; round<MAX_ROUNDS; round++){
+/* ---------- 경로 찾기 ---------- */
+// 한 가지 경로 성격(opts)에 대해: 경로 → 지하 구간 확인 → 막고 다시 찾기를 반복
+async function refine(all,excludes,opts,rounds,progress,withAlt){
+  for(let round=0; round<rounds; round++){
     let trips;
-    try{ trips=await route(a,b,excludes,round===0?2:0); }
-    catch(e){ if(e.fatal||!all.length) throw e; break; }   // 더 막으면 길이 없어짐
+    try{ trips=await route(state.a,state.b,excludes,withAlt&&round===0?2:0,opts); }
+    catch(e){ if(e.fatal) throw e; if(!all.length && !opts) throw e; return; }
     let main=null;
     for(let k=0;k<trips.length;k++){
       let under, unknown=false;
       try{ under=await findUnderground(trips[k].legs[0].shape); }
       catch(e){ if(e.fatal) throw e; if(k>0) continue; under=[]; unknown=true; }
       const before=all.length, c=addCand(all,{trip:trips[k],under,unknown});
-      if(k===0) main = all.length>before ? c : null;      // 같은 길이 또 나오면 더 진행해도 소용없음
+      if(k===0) main = all.length>before ? c : null;
     }
-    if(!main || main.unknown) break;
+    if(!main || main.unknown) return;
     const toBlock=main.under.filter(avoided);
-    if(!toBlock.length || excludes.length+toBlock.length>MAX_EXCLUDE) break;
-    excludes=excludes.concat(toBlock.map(u=>midpointWithHeading(u.coords)));
+    if(!toBlock.length || excludes.length+toBlock.length>MAX_EXCLUDE) return;
+    excludes.push(...toBlock.map(u=>midpointWithHeading(u.coords)));
     progress(`지하 구간 ${excludes.length}곳 피하는 중…`);
   }
-  // 마지막으로 찾은 우회로 주변의 다른 길도 후보로 추가
-  if(excludes.length>state.manual.length){
-    try{
-      const trips=await route(a,b,excludes,2);
-      for(const t of trips.slice(1)){ try{ addCand(all,{trip:t,under:await findUnderground(t.legs[0].shape)}); }catch(e){} }
-    }catch(e){}
+}
+const VARIANTS=[
+  {opts:{use_highways:0}, label:'고속도로를 덜 쓰는 길 확인 중…'},
+  {opts:{shortest:true},  label:'가장 짧은 길 확인 중…'}
+];
+async function search(progress){
+  const all=[];
+  const base=state.manual.slice();
+  await refine(all,base,null,MAX_ROUNDS,progress,true);
+  // 터널은 고속도로·자동차전용도로에 많아서, 성격이 다른 길도 따로 찾아 후보로 비교
+  for(const v of VARIANTS){
+    progress(v.label);
+    try{ await refine(all,base.slice(),v.opts,3,progress,false); }catch(e){ if(e.fatal) break; }
   }
+  if(!all.length) throw new Error('경로를 찾지 못했어요. 출발지와 목적지를 확인해 주세요.');
   return all;
 }
 
@@ -374,6 +389,7 @@ function draw(){
   // 후보 카드
   const box=$('#cands'); box.innerHTML='';
   box.hidden = state.cands.length<2;
+  $('#candNote').textContent = state.cands.length<2 ? '이 구간에서는 비교할 만한 다른 길이 없어요.' : '';
   state.cands.forEach((o,i)=>{
     const btn=document.createElement('button'); btn.type='button'; btn.className='cand';
     btn.setAttribute('role','radio'); btn.setAttribute('aria-checked',i===state.sel);
