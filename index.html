@@ -106,6 +106,18 @@ details.key a{color:var(--route)}
 .steps li span{color:var(--muted);margin-left:6px}
 h3{font-size:15px;margin:18px 0 0}
 .again{margin-top:14px;width:100%;padding:12px}
+.locate{position:fixed;right:14px;top:calc(14px + env(safe-area-inset-top,0px));z-index:9;width:48px;height:48px;border-radius:50%;
+  border:0;background:var(--panel);color:var(--muted);box-shadow:0 3px 12px rgba(24,50,67,.22);display:grid;place-items:center;cursor:pointer}
+.locate[aria-pressed="true"]{color:#2F80ED}
+.locate.wait{animation:blink 1s ease-in-out infinite}
+@keyframes blink{50%{opacity:.45}}
+.me{position:relative;width:22px;height:22px}
+.me .dot{position:absolute;inset:3px;border-radius:50%;background:#2F80ED;border:3px solid #fff;box-shadow:0 1px 4px rgba(0,0,0,.35)}
+.me .pulse{position:absolute;inset:-8px;border-radius:50%;background:rgba(47,128,237,.25);animation:pulse 2s ease-out infinite}
+.me .cone{position:absolute;left:50%;top:50%;width:0;height:0;margin-left:-9px;margin-top:-26px;border-left:9px solid transparent;border-right:9px solid transparent;
+  border-bottom:18px solid rgba(47,128,237,.55);transform-origin:9px 26px;display:none}
+@keyframes pulse{0%{transform:scale(.6);opacity:1}100%{transform:scale(1.6);opacity:0}}
+@media (prefers-reduced-motion: reduce){.me .pulse,.locate.wait{animation:none}}
 @media (prefers-reduced-motion: reduce){.sheet,.sw i,.sw i::after{transition:none}}
 @media (min-width:760px){
   .sheet{left:16px;right:auto;bottom:16px;top:16px;width:400px;max-height:none;border-radius:22px}
@@ -115,6 +127,9 @@ h3{font-size:15px;margin:18px 0 0}
 </head>
 <body>
 <div id="map" role="application" aria-label="지도"></div>
+<button class="locate" id="locate" type="button" aria-label="내 위치 보기" aria-pressed="false">
+  <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+</button>
 
 <section class="sheet" id="sheet">
   <button class="handle" id="handle" aria-expanded="true" aria-controls="sheetBody">
@@ -202,14 +217,68 @@ function showMsg(text,type='err'){ const m=$('#msg'); m.textContent=text; m.clas
 function clearMsg(){ $('#msg').className='msg'; }
 $('#from').addEventListener('input',()=>{ delete $('#from').dataset.lat; });
 
+/* ---------- 실시간 내 위치 ---------- */
+const me={marker:null,circle:null,watch:null,follow:false,last:null,wanted:false};
+const meIcon=L.divIcon({className:'',html:'<div class="me"><div class="pulse"></div><div class="cone"></div><div class="dot"></div></div>',iconSize:[22,22],iconAnchor:[11,11]});
+function onPos(p){
+  const ll=[p.coords.latitude,p.coords.longitude], acc=p.coords.accuracy||0;
+  const first=!me.last; me.last=p.coords;
+  $('#locate').classList.remove('wait');
+  if(!me.marker){
+    me.circle=L.circle(ll,{radius:acc,color:'#2F80ED',weight:1,opacity:.4,fillColor:'#2F80ED',fillOpacity:.1,interactive:false}).addTo(map);
+    me.marker=L.marker(ll,{icon:meIcon,keyboard:false,zIndexOffset:1000}).bindTooltip('내 위치').addTo(map);
+  } else { me.marker.setLatLng(ll); me.circle.setLatLng(ll).setRadius(acc); }
+  // 움직이는 중이면 진행 방향 표시
+  const cone=me.marker.getElement()&&me.marker.getElement().querySelector('.cone');
+  if(cone){ const h=p.coords.heading, moving=h!=null&&!isNaN(h)&&(p.coords.speed||0)>1;
+    cone.style.display=moving?'block':'none'; if(moving) cone.style.transform=`rotate(${h}deg)`; }
+  if(me.follow) map.panTo(ll,{animate:true});
+  else if(first && me.wanted) map.setView(ll,16);
+}
+function onPosErr(err){
+  $('#locate').classList.remove('wait');
+  if(err.code===1){ stopWatch(); me.wanted=false; setFollow(false);
+    showMsg('위치 권한이 꺼져 있어요. 휴대폰 설정 → 애플리케이션 → 브라우저 → 권한에서 위치를 허용해 주세요.'); }
+}
+function startWatch(){
+  if(!navigator.geolocation){ showMsg('이 브라우저는 위치 기능을 지원하지 않아요.'); return false; }
+  if(me.watch==null){
+    if(!me.last) $('#locate').classList.add('wait');
+    me.watch=navigator.geolocation.watchPosition(onPos,onPosErr,{enableHighAccuracy:true,maximumAge:5000,timeout:20000});
+  }
+  return true;
+}
+function stopWatch(){ if(me.watch!=null){ navigator.geolocation.clearWatch(me.watch); me.watch=null; } }
+function setFollow(on){ me.follow=on; $('#locate').setAttribute('aria-pressed',on); }
+
+// 내 위치 버튼: 누르면 내 위치로 이동하고, 움직일 때 지도가 따라감
+$('#locate').onclick=()=>{
+  me.wanted=true;
+  if(!startWatch()) return;
+  setFollow(true);
+  if(me.last) map.setView([me.last.latitude,me.last.longitude],Math.max(map.getZoom(),16));
+};
+map.on('dragstart',()=>setFollow(false));   // 손으로 지도를 움직이면 따라가기 멈춤
+
+// 화면을 끄거나 다른 앱으로 가면 배터리를 위해 위치 추적을 멈췄다가, 돌아오면 다시 시작
+document.addEventListener('visibilitychange',()=>{
+  if(document.hidden) stopWatch(); else if(me.wanted) startWatch();
+});
+// 이미 위치 권한을 허용한 기기라면 앱을 열자마자 내 위치 표시
+if(navigator.permissions && navigator.permissions.query){
+  navigator.permissions.query({name:'geolocation'}).then(r=>{ if(r.state==='granted'){ me.wanted=true; startWatch(); } }).catch(()=>{});
+}
+
+// 출발지 '현재 위치' 버튼
 $('#here').onclick=()=>{
   if(!navigator.geolocation){ showMsg('이 브라우저는 위치 기능을 지원하지 않아요. 출발지를 직접 입력해 주세요.'); return; }
+  const fill=c=>{ const f=$('#from'); f.value='현재 위치'; f.dataset.lat=c.latitude; f.dataset.lng=c.longitude; $('#here').textContent='현재 위치'; };
+  me.wanted=true; startWatch();
+  if(me.last){ fill(me.last); map.setView([me.last.latitude,me.last.longitude],15); return; }
   $('#here').textContent='찾는 중…';
-  navigator.geolocation.getCurrentPosition(p=>{
-    const f=$('#from'); f.value='현재 위치'; f.dataset.lat=p.coords.latitude; f.dataset.lng=p.coords.longitude;
-    $('#here').textContent='현재 위치'; map.setView([p.coords.latitude,p.coords.longitude],15);
-  },()=>{ $('#here').textContent='현재 위치'; showMsg('위치 권한이 꺼져 있어요. 휴대폰 설정에서 브라우저 위치 권한을 허용하거나 출발지를 직접 입력해 주세요.'); },
-  {enableHighAccuracy:true,timeout:10000});
+  navigator.geolocation.getCurrentPosition(p=>{ fill(p.coords); onPos(p); map.setView([p.coords.latitude,p.coords.longitude],15); },
+    ()=>{ $('#here').textContent='현재 위치'; showMsg('위치 권한이 꺼져 있어요. 휴대폰 설정에서 브라우저 위치 권한을 허용하거나 출발지를 직접 입력해 주세요.'); },
+    {enableHighAccuracy:true,timeout:10000});
 };
 
 /* ---------- 좌표 계산 ---------- */
@@ -379,6 +448,7 @@ function summaryOf(c){
 function draw(){
   const {a,b}=state, c=state.cands[state.sel], trip=c.trip;
   layer.clearLayers();
+  setFollow(false);   // 경로 전체를 보여 주는 동안은 내 위치 따라가기 멈춤
   // 고르지 않은 후보는 회색으로, 누르면 선택
   state.cands.forEach((o,i)=>{ if(i===state.sel) return;
     L.polyline(decode(o.trip.legs[0].shape).map(([x,y])=>[y,x]),{color:css('--muted'),weight:6,opacity:.55})
