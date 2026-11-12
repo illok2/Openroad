@@ -50,6 +50,20 @@ label.field{display:block;margin-top:12px}
 input[type=text],input[type=password]{flex:1;min-width:0;font:inherit;font-size:16px;color:var(--ink);background:var(--sky);border:1.5px solid var(--line);border-radius:12px;padding:12px 14px}
 input:focus-visible,button:focus-visible{outline:3px solid var(--focus);outline-offset:2px}
 .ghost{font:inherit;font-size:14px;font-weight:600;border:1.5px solid var(--line);background:var(--panel);color:var(--ink);border-radius:12px;padding:0 12px;cursor:pointer;white-space:nowrap}
+.field{display:block;margin-top:12px}
+input[type=search]{flex:1;min-width:0;font:inherit;font-size:16px;color:var(--ink);background:var(--sky);border:1.5px solid var(--line);border-radius:12px;padding:12px 14px;-webkit-appearance:none;appearance:none}
+.sugg{list-style:none;margin:6px 0 0;padding:4px;border:1.5px solid var(--line);border-radius:12px;background:var(--panel);max-height:280px;overflow-y:auto}
+.sugg[hidden]{display:none}
+.sugg li{padding:9px 10px;border-radius:9px;cursor:pointer}
+.sugg li[aria-selected="true"],.sugg li:hover{background:var(--route-soft)}
+.sugg li b{display:block;font-weight:700;font-size:15px}
+.sugg li b mark{background:none;color:var(--route)}
+.sugg li small{display:block;font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sugg li.none{color:var(--muted);font-size:14px;cursor:default;background:none}
+details.key{margin-top:14px;font-size:14px;color:var(--muted)}
+details.key summary{cursor:pointer}
+details.key p{margin:6px 0}
+details.key input{width:100%;font:inherit;font-size:15px;color:var(--ink);background:var(--sky);border:1.5px solid var(--line);border-radius:12px;padding:10px 12px}
 .resolved{font-size:12px;color:var(--muted);margin-top:4px;min-height:0}
 
 .toggles{margin-top:16px;border-top:1px solid var(--line)}
@@ -137,15 +151,19 @@ h3{font-size:15px;margin:18px 0 0}
   </button>
   <div class="body" id="sheetBody">
     <form id="form" autocomplete="off">
-      <label class="field"><span class="field-label">출발지</span>
-        <span class="inrow"><input type="text" id="from" placeholder="예: 인천시청" required>
+      <div class="field"><label class="field-label" for="from">출발지</label>
+        <span class="inrow"><input type="search" id="from" placeholder="예: 인천시청" required enterkeyhint="next"
+          role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="fromList">
         <button type="button" class="ghost" id="here">현재 위치</button></span>
+        <ul class="sugg" id="fromList" role="listbox" hidden></ul>
         <div class="resolved" id="fromRes"></div>
-      </label>
-      <label class="field"><span class="field-label">목적지</span>
-        <span class="inrow"><input type="text" id="to" placeholder="예: 송도 센트럴파크" required></span>
+      </div>
+      <div class="field"><label class="field-label" for="to">목적지</label>
+        <span class="inrow"><input type="search" id="to" placeholder="예: 송도 센트럴파크" required enterkeyhint="search"
+          role="combobox" aria-autocomplete="list" aria-expanded="false" aria-controls="toList"></span>
+        <ul class="sugg" id="toList" role="listbox" hidden></ul>
         <div class="resolved" id="toRes"></div>
-      </label>
+      </div>
 
       <div class="toggles">
         <label class="tog"><span><b>터널 피하기</b><em>산·도심 관통 터널을 지나지 않아요</em></span>
@@ -156,6 +174,11 @@ h3{font-size:15px;margin:18px 0 0}
 
       <button class="go" id="go" type="submit">경로 탐색</button>
       <button class="ghost install" id="install" type="button">홈 화면에 앱 설치</button>
+      <details class="key" id="keyBox">
+        <summary>장소 검색 더 정확하게 (선택)</summary>
+        <p>카카오 개발자 사이트에서 발급한 <b>JavaScript 키</b>를 넣으면 카카오맵 수준으로 장소 후보를 찾아요. 비워 두면 무료 OpenStreetMap 검색을 써요.</p>
+        <input type="text" id="kakaoKey" placeholder="카카오 JavaScript 키" spellcheck="false">
+      </details>
     </form>
 
     <div class="msg" id="msg" role="status"></div>
@@ -180,6 +203,7 @@ h3{font-size:15px;margin:18px 0 0}
 <script src="https://cdn.jsdelivr.net/npm/@maplibre/maplibre-gl-leaflet@0.1.3/leaflet-maplibre-gl.js"></script>
 <script>
 const $ = s => document.querySelector(s);
+const store={ get(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }, set(k,v){ try{ localStorage.setItem(k,v); }catch(e){} } };
 const VALHALLA = 'https://valhalla1.openstreetmap.de';
 const MAX_EXCLUDE = 50;     // 공개 서버의 제외 지점 한도
 const MAX_ROUNDS = 8;
@@ -215,7 +239,6 @@ const sheet=$('#sheet'), handle=$('#handle');
 handle.onclick=()=>{ const m=sheet.classList.toggle('min'); handle.setAttribute('aria-expanded',!m); $('#chev').textContent=m?'펼치기':'접기'; };
 function showMsg(text,type='err'){ const m=$('#msg'); m.textContent=text; m.className='msg show '+type; }
 function clearMsg(){ $('#msg').className='msg'; }
-$('#from').addEventListener('input',()=>{ delete $('#from').dataset.lat; });
 
 /* ---------- 실시간 내 위치 ---------- */
 const me={marker:null,circle:null,watch:null,follow:false,last:null,wanted:false};
@@ -272,7 +295,7 @@ if(navigator.permissions && navigator.permissions.query){
 // 출발지 '현재 위치' 버튼
 $('#here').onclick=()=>{
   if(!navigator.geolocation){ showMsg('이 브라우저는 위치 기능을 지원하지 않아요. 출발지를 직접 입력해 주세요.'); return; }
-  const fill=c=>{ const f=$('#from'); f.value='현재 위치'; f.dataset.lat=c.latitude; f.dataset.lng=c.longitude; $('#here').textContent='현재 위치'; };
+  const fill=c=>{ const f=$('#from'); f.value='현재 위치'; f.dataset.lat=c.latitude; f.dataset.lng=c.longitude; f.dataset.label='현재 위치'; $('#here').textContent='현재 위치'; };
   me.wanted=true; startWatch();
   if(me.last){ fill(me.last); map.setView([me.last.latitude,me.last.longitude],15); return; }
   $('#here').textContent='찾는 중…';
@@ -306,16 +329,102 @@ const km = m => m>=1000 ? (m/1000).toFixed(1)+'km' : Math.round(m)+'m';
 const mins = s => { const t=Math.round(s/60); return t>=60 ? `${Math.floor(t/60)}시간 ${t%60}분` : `${t}분`; };
 
 /* ---------- 1·2단계: 장소 검색 ---------- */
+// 검색 위치 기준: 내 위치 → 지도 중심
+function biasPoint(){ if(me.last) return {lat:me.last.latitude,lng:me.last.longitude}; const c=map.getCenter(); return {lat:c.lat,lng:c.lng}; }
+
+// (1) 무료 검색: Photon (OpenStreetMap 기반, 입력 중 자동완성용)
+async function photonSearch(q,signal){
+  const b=biasPoint();
+  const url=`https://photon.komoot.io/api/?q=${encodeURIComponent(q)}&limit=8&lat=${b.lat}&lon=${b.lng}&bbox=124.5,33,131.9,38.9`;
+  const r=await fetch(url,{signal}); if(!r.ok) throw new Error('photon '+r.status);
+  const j=await r.json();
+  return (j.features||[]).map(f=>{ const p=f.properties||{};
+    const addr=[p.state,p.city,p.district||p.county,p.locality,p.street&&(p.street+(p.housenumber?' '+p.housenumber:''))]
+      .filter((v,i,a)=>v&&a.indexOf(v)===i&&v!==p.name).join(' ');
+    return {name:p.name||addr||q, addr, lat:f.geometry.coordinates[1], lng:f.geometry.coordinates[0]}; });
+}
+// (2) 선택: 카카오 장소 검색 (JavaScript 키가 있을 때)
+let kakaoReady=null;
+function kakaoKey(){ return ($('#kakaoKey').value||'').trim(); }
+function loadKakao(){
+  if(kakaoReady) return kakaoReady;
+  kakaoReady=new Promise((res,rej)=>{
+    const sc=document.createElement('script');
+    sc.src=`https://dapi.kakao.com/v2/maps/sdk.js?appkey=${encodeURIComponent(kakaoKey())}&libraries=services&autoload=false`;
+    sc.onload=()=>{ try{ kakao.maps.load(()=>res(new kakao.maps.services.Places())); }catch(e){ rej(e); } };
+    sc.onerror=()=>rej(new Error('kakao load'));
+    document.head.appendChild(sc);
+  }).catch(e=>{ kakaoReady=null; throw e; });
+  return kakaoReady;
+}
+async function kakaoSearch(q){
+  const places=await loadKakao(), b=biasPoint();
+  return new Promise((res,rej)=>{
+    places.keywordSearch(q,(data,status)=>{
+      if(status===kakao.maps.services.Status.OK)
+        res(data.slice(0,8).map(d=>({name:d.place_name,addr:d.road_address_name||d.address_name,cat:d.category_group_name,lat:+d.y,lng:+d.x})));
+      else if(status===kakao.maps.services.Status.ZERO_RESULT) res([]);
+      else rej(new Error('kakao '+status));
+    },{location:new kakao.maps.LatLng(b.lat,b.lng)});
+  });
+}
+async function searchPlaces(q,signal){
+  if(kakaoKey()){ try{ return await kakaoSearch(q); }catch(e){ console.warn('카카오 검색 실패, 무료 검색으로 전환',e); } }
+  return photonSearch(q,signal);
+}
+
+// 입력 중 후보 목록
+function setupSuggest(input,list,res){
+  let timer=null, ctrl=null, items=[], active=-1, seq=0;
+  const close=()=>{ list.hidden=true; input.setAttribute('aria-expanded','false'); active=-1; };
+  const esc=t=>t.replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  const hl=(name,q)=>{ const i=name.indexOf(q); return i<0?esc(name):esc(name.slice(0,i))+'<mark>'+esc(q)+'</mark>'+esc(name.slice(i+q.length)); };
+  const pick=it=>{ input.value=it.name; input.dataset.lat=it.lat; input.dataset.lng=it.lng; input.dataset.label=it.addr||it.name;
+    res.textContent=it.addr||''; close(); };
+  const render=q=>{
+    list.innerHTML='';
+    if(!items.length){ list.innerHTML='<li class="none">검색 결과가 없어요. 다른 이름으로 입력해 보세요.</li>'; }
+    items.forEach((it,i)=>{ const li=document.createElement('li'); li.setAttribute('role','option'); li.id=input.id+'-o'+i;
+      li.innerHTML=`<b>${hl(it.name,q)}</b><small>${esc([it.cat,it.addr].filter(Boolean).join(' · '))}</small>`;
+      li.addEventListener('pointerdown',e=>{ e.preventDefault(); pick(it); });
+      list.appendChild(li); });
+    list.hidden=false; input.setAttribute('aria-expanded','true');
+  };
+  const mark=()=>[...list.children].forEach((li,i)=>li.setAttribute('aria-selected',i===active));
+  input.addEventListener('input',()=>{
+    delete input.dataset.lat; delete input.dataset.lng; delete input.dataset.label; res.textContent='';
+    const q=input.value.trim(); clearTimeout(timer); if(ctrl) ctrl.abort();
+    if(!q){ close(); return; }
+    timer=setTimeout(async()=>{
+      const my=++seq; ctrl=new AbortController();
+      try{ const r=await searchPlaces(q,ctrl.signal); if(my!==seq) return; items=r; active=-1; render(q); }
+      catch(e){ if(e.name!=='AbortError') console.warn(e); }
+    },250);
+  });
+  input.addEventListener('keydown',e=>{
+    if(list.hidden||!items.length) return;
+    if(e.key==='ArrowDown'){ e.preventDefault(); active=(active+1)%items.length; mark(); }
+    else if(e.key==='ArrowUp'){ e.preventDefault(); active=(active-1+items.length)%items.length; mark(); }
+    else if(e.key==='Enter' && active>=0){ e.preventDefault(); pick(items[active]); }
+    else if(e.key==='Escape') close();
+  });
+  input.addEventListener('blur',()=>setTimeout(close,150));
+}
+setupSuggest($('#from'),$('#fromList'),$('#fromRes'));
+setupSuggest($('#to'),$('#toList'),$('#toRes'));
+$('#kakaoKey').value=store.get('kakao_key')||'';
+$('#kakaoKey').addEventListener('change',e=>{ store.set('kakao_key',e.target.value.trim()); kakaoReady=null; });
+
+// 경로 검색 때 좌표 확정: 고른 후보 → 좌표 입력 → 검색 결과 1순위
 async function geocode(input){
-  if(input.dataset.lat) return {lat:+input.dataset.lat,lng:+input.dataset.lng,label:'현재 위치'};
+  if(input.dataset.lat) return {lat:+input.dataset.lat,lng:+input.dataset.lng,label:input.dataset.label||input.value};
   const q=input.value.trim();
   const m=q.match(/^(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)$/);
   if(m) return {lat:+m[1],lng:+m[2],label:q};
-  const r=await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=kr&accept-language=ko&q=${encodeURIComponent(q)}`);
-  if(!r.ok) throw new Error('장소 검색 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.');
-  const j=await r.json();
-  if(!j.length) throw new Error(`"${q}"을(를) 찾지 못했어요. 시·구 이름을 붙이거나 더 정확한 장소명을 입력해 주세요.`);
-  return {lat:+j[0].lat,lng:+j[0].lon,label:j[0].display_name};
+  let r=[];
+  try{ r=await searchPlaces(q); }catch(e){ throw new Error('장소 검색 서버에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.'); }
+  if(!r.length) throw new Error(`"${q}"을(를) 찾지 못했어요. 다른 이름이나 주소로 입력해 보세요.`);
+  return {lat:r[0].lat,lng:r[0].lng,label:[r[0].name,r[0].addr].filter(Boolean).join(' · ')};
 }
 
 /* ---------- 터널 / 지하차도 구분 ---------- */

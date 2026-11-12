@@ -1,5 +1,5 @@
 // 트인길 서비스 워커: 앱 화면과 라이브러리는 저장해 두고, 지도·경로 데이터는 항상 인터넷에서 새로 받음
-const VERSION = 'openroad-v5';
+const VERSION = 'openroad-v6';
 const SHELL = ['./', './index.html', './manifest.webmanifest', './icon-192.png', './icon-512.png', './favicon.png'];
 const LIB_HOSTS = ['cdnjs.cloudflare.com', 'cdn.jsdelivr.net'];
 
