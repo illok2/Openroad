@@ -133,7 +133,29 @@ h3{font-size:15px;margin:18px 0 0}
 @keyframes pulse{0%{transform:scale(.6);opacity:1}100%{transform:scale(1.6);opacity:0}}
 @media (prefers-reduced-motion: reduce){.me .pulse,.locate.wait{animation:none}}
 @media (prefers-reduced-motion: reduce){.sheet,.sw i,.sw i::after{transition:none}}
+/* 주행 모드 */
+.nav-top,.nav-bottom{display:none}
+body.nav-mode .sheet{display:none}
+body.nav-mode .nav-top{display:block;position:fixed;left:10px;right:10px;top:calc(10px + env(safe-area-inset-top,0px));z-index:12;
+  background:var(--route);color:#fff;border-radius:18px;padding:14px 18px;box-shadow:0 6px 20px rgba(0,0,0,.25)}
+.nav-turn{display:flex;align-items:center;gap:14px}
+.nav-icon{font-size:44px;line-height:1;font-weight:700}
+.nav-dist{font-size:40px;font-weight:800;letter-spacing:-.03em;line-height:1}
+.nav-text{font-size:19px;font-weight:600;margin-top:6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nav-under{margin-top:10px;padding:9px 12px;border-radius:12px;background:var(--under);color:#fff;font-size:16px;font-weight:700}
+.nav-under.inside{background:#fff;color:var(--under)}
+.nav-under[hidden]{display:none}
+body.nav-mode .nav-bottom{display:flex;align-items:center;gap:10px;position:fixed;left:10px;right:10px;
+  bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:12;background:var(--panel);color:var(--ink);border-radius:18px;padding:12px 14px;box-shadow:0 6px 20px rgba(0,0,0,.22)}
+.nav-bottom>div{flex:1;min-width:0}
+.nav-remain{font-size:20px;font-weight:800}
+.nav-eta{font-size:14px;color:var(--muted)}
+.nav-btn{font:inherit;font-size:16px;font-weight:700;min-height:52px;min-width:52px;border-radius:14px;border:1.5px solid var(--line);background:var(--panel);color:var(--ink);cursor:pointer;padding:0 14px}
+.nav-btn.stop{background:var(--under-soft);border-color:var(--under)}
+body.nav-mode .locate{top:auto;bottom:calc(96px + env(safe-area-inset-bottom,0px))}
+#navStart{margin-top:16px}
 @media (min-width:760px){
+  body.nav-mode .nav-top,body.nav-mode .nav-bottom{left:auto;right:16px;width:420px}
   .sheet{left:16px;right:auto;bottom:16px;top:16px;width:400px;max-height:none;border-radius:22px}
   .sheet.min{transform:none}
 }
@@ -145,6 +167,16 @@ h3{font-size:15px;margin:18px 0 0}
   <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><circle cx="12" cy="12" r="4" fill="currentColor"/><circle cx="12" cy="12" r="8" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 1v3M12 20v3M1 12h3M20 12h3" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
 </button>
 
+<div class="nav-top" id="navTop" aria-live="polite">
+  <div class="nav-turn"><span class="nav-icon" id="navIcon">↑</span><span class="nav-dist" id="navDist"></span></div>
+  <div class="nav-text" id="navText">안내를 준비하는 중…</div>
+  <div class="nav-under" id="navUnder" hidden></div>
+</div>
+<div class="nav-bottom" id="navBottom">
+  <div><div class="nav-remain" id="navRemain"></div><div class="nav-eta" id="navEta"></div></div>
+  <button type="button" class="nav-btn" id="navVoice" aria-label="음성 안내 켜기/끄기" aria-pressed="true">🔊</button>
+  <button type="button" class="nav-btn stop" id="navStop">안내 종료</button>
+</div>
 <section class="sheet" id="sheet">
   <button class="handle" id="handle" aria-expanded="true" aria-controls="sheetBody">
     <span class="brand">트인길<small>터널·지하차도 없이 가는 길</small></span><span class="chev" id="chev">접기</span>
@@ -190,6 +222,7 @@ h3{font-size:15px;margin:18px 0 0}
       <div class="bar" id="bar" aria-hidden="true"></div>
       <div class="meta" id="meta"></div>
       <ul class="under-list" id="underList"></ul>
+      <button class="go" id="navStart" type="button">이 경로로 주행 시작</button>
       <h3>안내</h3>
       <ol class="steps" id="steps"></ol>
       <button class="ghost again" id="again" type="button">다시 검색</button>
@@ -256,6 +289,7 @@ function onPos(p){
   if(cone){ const h=p.coords.heading, moving=h!=null&&!isNaN(h)&&(p.coords.speed||0)>1;
     cone.style.display=moving?'block':'none'; if(moving) cone.style.transform=`rotate(${h}deg)`; }
   if(me.follow) map.panTo(ll,{animate:true});
+  if(typeof navOnPos==='function') navOnPos(p);
   else if(first && me.wanted) map.setView(ll,16);
 }
 function onPosErr(err){
@@ -554,10 +588,10 @@ function summaryOf(c){
   if(!c.under.length) return '지하 구간 없음';
   return `지하 ${c.under.length}곳 · ${km(c.underLen)}`;
 }
-function draw(){
+function draw(opts={}){
   const {a,b}=state, c=state.cands[state.sel], trip=c.trip;
   layer.clearLayers();
-  setFollow(false);   // 경로 전체를 보여 주는 동안은 내 위치 따라가기 멈춤
+  if(!opts.nav) setFollow(false);   // 경로 전체를 보여 주는 동안은 내 위치 따라가기 멈춤
   // 고르지 않은 후보는 회색으로, 누르면 선택
   state.cands.forEach((o,i)=>{ if(i===state.sel) return;
     L.polyline(decode(o.trip.legs[0].shape).map(([x,y])=>[y,x]),{color:css('--muted'),weight:6,opacity:.55})
@@ -593,7 +627,7 @@ function draw(){
   });
   L.circleMarker([a.lat,a.lng],{radius:9,color:'#fff',weight:3,fillColor:css('--route'),fillOpacity:1}).bindTooltip('출발').addTo(layer);
   L.circleMarker([b.lat,b.lng],{radius:9,color:'#fff',weight:3,fillColor:css('--ink'),fillOpacity:1}).bindTooltip('도착').addTo(layer);
-  map.fitBounds(L.latLngBounds(coords),{padding:[30,30]});
+  if(!opts.nav) map.fitBounds(L.latLngBounds(coords),{padding:[30,30]});
 
   const pct=Math.max(0,Math.min(100,100-c.underLen/c.dist*100));
   $('#pct').textContent=(pct>=99.95?100:pct.toFixed(1))+'%';
@@ -635,6 +669,205 @@ async function avoidSegment(u){
   }
   busy=false;
 }
+
+/* =========================================================
+   주행 모드: 실시간 안내 · 음성 · 경로 이탈 재탐색 · 화면 켜짐 유지 · 지하 구간 미리 알림
+   ========================================================= */
+const nav={on:false,coords:[],cum:[],steps:[],unders:[],idx:0,along:0,offCount:0,lastReroute:0,
+  rerouting:false,lastFix:0,speed:0,spoken:new Set(),voice:true,wake:null,timer:null,cand:null};
+
+// --- 좌표를 미터 단위 평면으로 바꿔 계산 (짧은 거리에서는 충분히 정확) ---
+function toXY(p,ref){ const k=Math.cos(ref[1]*Math.PI/180);
+  return [(p[0]-ref[0])*111320*k,(p[1]-ref[1])*110540]; }
+function projectOnSeg(p,a,b){
+  const A=toXY(a,p),B=toXY(b,p); const dx=B[0]-A[0],dy=B[1]-A[1], L2=dx*dx+dy*dy;
+  let t=L2?-(A[0]*dx+A[1]*dy)/L2:0; t=Math.max(0,Math.min(1,t));
+  const x=A[0]+t*dx,y=A[1]+t*dy; return {d:Math.hypot(x,y),t};
+}
+// 경로 위에서 내 위치가 어디쯤인지 찾기 (출발점부터의 거리)
+function locate(p,from=nav.idx,span=250,full=false){
+  const n=nav.coords.length; let best={d:Infinity,i:0,t:0};
+  const s=full?0:Math.max(0,from-10), e=full?n-1:Math.min(n-1,from+span);
+  for(let i=s;i<e;i++){ const r=projectOnSeg(p,nav.coords[i],nav.coords[i+1]); if(r.d<best.d) best={d:r.d,i,t:r.t}; }
+  if(!full && best.d>60) return locate(p,0,0,true);
+  const segLen=nav.cum[best.i+1]-nav.cum[best.i];
+  return {dist:best.d,idx:best.i,along:nav.cum[best.i]+segLen*best.t};
+}
+
+// --- Valhalla 안내를 한국어 문장으로 ---
+const TURN={
+  9:['↗','오른쪽 방향','오른쪽 방향으로 가세요'], 10:['↱','우회전','우회전하세요'], 11:['↱','급우회전','급하게 우회전하세요'],
+  12:['↶','유턴','유턴하세요'], 13:['↶','유턴','유턴하세요'], 14:['↰','급좌회전','급하게 좌회전하세요'],
+  15:['↰','좌회전','좌회전하세요'], 16:['↖','왼쪽 방향','왼쪽 방향으로 가세요'],
+  17:['↑','진입로 진입','진입로로 들어가세요'], 18:['↗','오른쪽 진입로','오른쪽 진입로로 들어가세요'], 19:['↖','왼쪽 진입로','왼쪽 진입로로 들어가세요'],
+  20:['↗','오른쪽 출구','오른쪽 출구로 나가세요'], 21:['↖','왼쪽 출구','왼쪽 출구로 나가세요'],
+  22:['↑','직진','계속 직진하세요'], 23:['↗','오른쪽 차로 유지','오른쪽 차로를 유지하세요'], 24:['↖','왼쪽 차로 유지','왼쪽 차로를 유지하세요'],
+  25:['⤵','합류','합류하세요'], 37:['⤵','오른쪽에서 합류','오른쪽으로 합류하세요'], 38:['⤵','왼쪽에서 합류','왼쪽으로 합류하세요'],
+  26:['⟳','회전교차로','회전교차로로 들어가세요'], 27:['⟳','회전교차로 나가기','회전교차로에서 나가세요'],
+  28:['⛴','도선 탑승','배에 타세요'], 29:['⛴','도선 하선','배에서 내리세요'],
+  4:['⚑','목적지','목적지에 도착해요'], 5:['⚑','목적지(오른쪽)','오른쪽에 목적지가 있어요'], 6:['⚑','목적지(왼쪽)','왼쪽에 목적지가 있어요']
+};
+function stepInfo(m){
+  const t=TURN[m.type]; if(!t) return null;
+  const road=(m.street_names&&m.street_names[0])||(m.begin_street_names&&m.begin_street_names[0])||'';
+  let say=t[2];
+  if(m.type===26 && m.roundabout_exit_count) say=`회전교차로에서 ${m.roundabout_exit_count}번째 출구로 나가세요`;
+  const toward = road && m.type!==4 && m.type!==5 && m.type!==6 ? `${road} 쪽으로 ` : '';
+  return {icon:t[0],short:t[1],road,say:toward+say};
+}
+const distWords=m=> m>=950 ? `${(Math.round(m/100)/10).toString().replace(/\.0$/,'')}킬로미터` : `${Math.max(50,Math.round(m/50)*50)}미터`;
+const distShort=m=> m>=1000 ? (m/1000).toFixed(1)+'km' : (Math.round(m/10)*10)+'m';
+
+// --- 음성 ---
+function speak(text,urgent=false){
+  if(!nav.voice || !('speechSynthesis' in window)) return;
+  if(urgent) speechSynthesis.cancel();
+  const u=new SpeechSynthesisUtterance(text); u.lang='ko-KR'; u.rate=1;
+  const ko=speechSynthesis.getVoices().find(v=>/ko/i.test(v.lang)); if(ko) u.voice=ko;
+  speechSynthesis.speak(u);
+}
+function speakOnce(key,text,urgent){ if(nav.spoken.has(key)) return; nav.spoken.add(key); speak(text,urgent); }
+
+// --- 화면 켜짐 유지 ---
+async function keepAwake(){
+  try{ if('wakeLock' in navigator && !nav.wake){ nav.wake=await navigator.wakeLock.request('screen'); nav.wake.addEventListener('release',()=>{ nav.wake=null; }); } }catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{ if(!document.hidden && nav.on) keepAwake(); });
+
+// --- 선택한 경로를 주행용으로 준비 ---
+function loadNavRoute(c){
+  nav.cand=c;
+  nav.coords=decode(c.trip.legs[0].shape);
+  nav.cum=[0]; for(let i=1;i<nav.coords.length;i++) nav.cum.push(nav.cum[i-1]+hav(nav.coords[i-1],nav.coords[i]));
+  nav.steps=(c.trip.legs[0].maneuvers||[]).map((m,i)=>({i,m,info:stepInfo(m),at:nav.cum[Math.min(m.begin_shape_index||0,nav.cum.length-1)]}))
+    .filter(s=>s.info && s.at>5);
+  nav.unders=c.under.map((u,k)=>{
+    const a=locate(u.coords[0],0,0,true).along, b=locate(u.coords[u.coords.length-1],0,0,true).along;
+    return {k,kind:u.kind,name:u.name,len:u.len,start:Math.min(a,b),end:Math.max(a,b)};
+  }).sort((x,y)=>x.start-y.start);
+  nav.idx=0; nav.along=0; nav.offCount=0; nav.spoken=new Set();
+}
+
+// --- 화면 갱신 ---
+function renderNav(){
+  const total=nav.cum[nav.cum.length-1]||1, remain=Math.max(0,total-nav.along);
+  const next=nav.steps.find(s=>s.at>nav.along+8);
+  if(next){
+    const d=next.at-nav.along;
+    $('#navIcon').textContent=next.info.icon;
+    $('#navDist').textContent=distShort(d);
+    $('#navText').textContent=next.info.short+(next.info.road?` · ${next.info.road}`:'');
+  }
+  // 남은 시간은 경로 전체 소요 시간을 남은 거리 비율로 나눠 추정
+  const remainSec=nav.cand.time*remain/total;
+  const eta=new Date(Date.now()+remainSec*1000);
+  $('#navRemain').textContent=`${mins(remainSec)} · ${distShort(remain)}`;
+  $('#navEta').textContent=`${String(eta.getHours()).padStart(2,'0')}:${String(eta.getMinutes()).padStart(2,'0')} 도착`;
+
+  // 지하 구간 배너
+  const inside=nav.unders.find(u=>nav.along>=u.start && nav.along<u.end);
+  const ahead=nav.unders.find(u=>u.start>nav.along && u.start-nav.along<=1500);
+  const ban=$('#navUnder'), word=u=>u.kind==='tunnel'?'터널':'지하차도';
+  if(inside){
+    ban.hidden=false; ban.className='nav-under inside';
+    ban.textContent=`${word(inside)} 안 · 밖까지 ${distShort(inside.end-nav.along)}`;
+  } else if(ahead){
+    ban.hidden=false; ban.className='nav-under';
+    ban.textContent=`${distShort(ahead.start-nav.along)} 앞 ${word(ahead)}${ahead.name?' ('+ahead.name+')':''} · 길이 ${distShort(ahead.len)}`;
+  } else ban.hidden=true;
+}
+
+// --- 음성 안내 시점 판단 ---
+function announce(){
+  const sp=Math.max(nav.speed,8);                     // 최소 시속 약 30km로 가정
+  const next=nav.steps.find(s=>s.at>nav.along+8);
+  if(next){
+    const d=next.at-nav.along, far=Math.min(900,Math.max(300,sp*25)), near=Math.max(120,sp*8);
+    const prev=nav.steps[nav.steps.indexOf(next)-1], gap=next.at-(prev?prev.at:0);
+    if(d<=near) speakOnce(next.i+'n',`잠시 후 ${next.info.say}`,true);
+    else if(d<=far && gap>far*1.2) speakOnce(next.i+'f',`${distWords(d)} 앞에서 ${next.info.say}`);
+  }
+  for(const u of nav.unders){
+    const T=u.kind==='tunnel', w=T?'터널':'지하차도', iga=T?'터널이':'지하차도가', eul=T?'터널을':'지하차도를', secs=Math.max(5,Math.round(u.len/sp/5)*5);
+    const toStart=u.start-nav.along;
+    if(toStart>0 && toStart<=1000 && toStart>350)
+      speakOnce('u'+u.k+'a',`${distWords(toStart)} 앞에 ${iga} 있어요. 길이는 ${distWords(u.len)}, 약 ${secs}초 동안 지나가요.`);
+    else if(toStart>0 && toStart<=Math.max(250,sp*12))
+      speakOnce('u'+u.k+'b',`곧 ${w}에 들어가요. ${secs}초 정도면 다시 밖으로 나와요.`);
+    else if(nav.along>=u.start && nav.along<u.end && u.len>300 && (u.end-nav.along)<=Math.min(300,u.len/2))
+      speakOnce('u'+u.k+'c',`출구까지 ${distWords(u.end-nav.along)} 남았어요.`);
+    else if(nav.along>=u.end && nav.along-u.end<200)
+      speakOnce('u'+u.k+'d',`${eul} 빠져나왔어요.`);
+  }
+}
+
+// --- 위치가 들어올 때마다 ---
+function navOnPos(p){
+  if(!nav.on || nav.rerouting) return;
+  const pt=[p.coords.longitude,p.coords.latitude], acc=p.coords.accuracy||30;
+  nav.lastFix=Date.now();
+  if(p.coords.speed!=null && !isNaN(p.coords.speed)) nav.speed=p.coords.speed;
+  const r=locate(pt);
+  // 경로에서 벗어났는지: 오차를 감안해 3번 연속으로 멀어지면 재탐색
+  if(r.dist>Math.max(45,acc*1.5) && acc<60){ if(++nav.offCount>=3) return reroute(pt); }
+  else nav.offCount=0;
+  if(r.dist<=Math.max(45,acc*1.5)){ nav.idx=r.idx; nav.along=Math.max(nav.along-30,r.along); }
+  const total=nav.cum[nav.cum.length-1];
+  if(total-nav.along<30){ speakOnce('arrive','목적지에 도착했어요. 수고하셨어요.',true); renderNav(); setTimeout(()=>stopNav(true),2500); return; }
+  renderNav(); announce();
+}
+// 터널 안처럼 GPS가 끊기면 마지막 속도로 위치를 추정해 남은 거리 표시를 이어감
+function deadReckon(){
+  if(!nav.on || nav.rerouting) return;
+  const gap=(Date.now()-nav.lastFix)/1000;
+  if(gap>2.5 && nav.speed>2 && gap<120){
+    const near=nav.unders.some(u=>nav.along>=u.start-150 && nav.along<u.end+50);
+    if(near){ nav.along=Math.min(nav.cum[nav.cum.length-1],nav.along+nav.speed); renderNav(); announce(); }
+  }
+}
+
+// --- 경로 이탈 시 재탐색 (터널·지하차도 회피 설정 유지) ---
+async function reroute(pt){
+  if(nav.rerouting || Date.now()-nav.lastReroute<15000) return;
+  nav.rerouting=true; nav.lastReroute=Date.now(); nav.offCount=0;
+  speak('경로를 다시 찾고 있어요.',true);
+  $('#navText').textContent='경로를 다시 찾는 중…'; $('#navDist').textContent=''; $('#navIcon').textContent='⟳';
+  try{
+    state.a={lat:pt[1],lng:pt[0],label:'현재 위치'};
+    const all=await search(()=>{});
+    state.cands=pickCands(all); state.sel=0;
+    draw({nav:true}); loadNavRoute(state.cands[0]);
+    speak(state.cands[0].blocked>0?'새 경로로 안내할게요. 피할 수 없는 지하 구간이 있어요.':'새 경로로 안내할게요.');
+  }catch(e){ speak('경로를 찾지 못했어요. 잠시 후 다시 시도할게요.'); }
+  nav.rerouting=false; renderNav();
+}
+
+// --- 시작 / 종료 ---
+function startNav(){
+  const c=state.cands[state.sel]; if(!c) return;
+  nav.on=true; loadNavRoute(c);
+  document.body.classList.add('nav-mode');
+  me.wanted=true; startWatch(); setFollow(true);
+  if(me.last) map.setView([me.last.latitude,me.last.longitude],17); else map.setZoom(17);
+  keepAwake();
+  nav.timer=setInterval(deadReckon,1000);
+  renderNav();
+  const t=nav.unders.length, first=nav.steps[0];
+  speak(`안내를 시작할게요. ${t?`가는 길에 지하 구간이 ${t}곳 있어요. 가까워지면 미리 알려 드릴게요.`:'이 경로에는 터널과 지하차도가 없어요.'}`,true);
+  if(me.last) navOnPos({coords:me.last});
+}
+function stopNav(arrived){
+  nav.on=false; clearInterval(nav.timer);
+  if('speechSynthesis' in window && !arrived) speechSynthesis.cancel();
+  try{ nav.wake&&nav.wake.release(); }catch(e){} nav.wake=null;
+  document.body.classList.remove('nav-mode');
+  setFollow(false);
+}
+$('#navStart').onclick=startNav;
+$('#navStop').onclick=()=>stopNav(false);
+$('#navVoice').onclick=()=>{ nav.voice=!nav.voice; $('#navVoice').setAttribute('aria-pressed',nav.voice);
+  $('#navVoice').textContent=nav.voice?'🔊':'🔇'; if(!nav.voice && 'speechSynthesis' in window) speechSynthesis.cancel(); };
+if('speechSynthesis' in window) speechSynthesis.getVoices();   // 음성 목록 미리 불러오기
 
 /* ---------- PWA: 설치·오프라인 ---------- */
 if('serviceWorker' in navigator && location.protocol==='https:'){
